@@ -93,6 +93,9 @@ def build_graph(nodes: Iterable[NodeRecord], edges: Iterable[EdgeRecord]) -> nx.
     return G
 
 
+build_graph_from_records = build_graph
+
+
 # Ponytail anti-hallucination verification self-test
 if __name__ == "__main__":
     n1 = NodeRecord(
