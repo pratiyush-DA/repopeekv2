@@ -163,6 +163,31 @@ def scan_repository(root: Path | str) -> dict[FileType, list[Path]]:
     return discovered
 
 
+from dataclasses import dataclass
+
+
+@dataclass
+class DiscoveredFile:
+    full_path: Path
+    relative_path: str
+    file_type: FileType
+
+
+def scan_workspace(root: Path | str) -> list[DiscoveredFile]:
+    """Flattens scanned repository into list of DiscoveredFile objects."""
+    root_path = Path(root).resolve()
+    discovered_dict = scan_repository(root_path)
+    result: list[DiscoveredFile] = []
+    for ftype, paths in discovered_dict.items():
+        for p in paths:
+            try:
+                rel = p.relative_to(root_path).as_posix()
+            except ValueError:
+                rel = str(p).replace("\\", "/")
+            result.append(DiscoveredFile(full_path=p, relative_path=rel, file_type=ftype))
+    return result
+
+
 # Ponytail anti-hallucination verification block
 if __name__ == "__main__":
     demo_py = Path("test_demo.py")
