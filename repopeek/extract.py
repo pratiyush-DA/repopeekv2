@@ -1,6 +1,7 @@
 """Polyglot AST extraction engine and universal namespace adapter across all 40+ languages."""
 from __future__ import annotations
 
+import importlib
 import re
 import sys
 from pathlib import Path
@@ -11,16 +12,32 @@ _GRAPHIFY_REF = Path(__file__).resolve().parent.parent / "Reference" / "graphify
 if _GRAPHIFY_REF.is_dir() and str(_GRAPHIFY_REF) not in sys.path:
     sys.path.insert(0, str(_GRAPHIFY_REF))
 
-try:
-    from graphify.extract import _DISPATCH, _SHEBANG_DISPATCH, _safe_extract
-except ImportError:
-    _DISPATCH: dict[str, Any] = {}
-    _SHEBANG_DISPATCH: dict[str, Any] = {}
+_dispatch_registry: dict[str, Any] = {}
+_shebang_registry: dict[str, Any] = {}
+_safe_extract_fn: Callable[..., dict[str, Any]] | None = None
 
-    def _fallback_extract(extractor: Callable, path: Path, **kwargs: Any) -> dict[str, Any]:
-        return {"nodes": [], "edges": []}
 
-    _safe_extract = _fallback_extract
+def _ensure_extractors_loaded() -> tuple[dict[str, Any], dict[str, Any], Callable[..., dict[str, Any]] | None]:
+    """Dynamically resolves and caches the upstream polyglot extractor dispatch tables."""
+    global _dispatch_registry, _shebang_registry, _safe_extract_fn
+    if _dispatch_registry:
+        return _dispatch_registry, _shebang_registry, _safe_extract_fn
+
+    if _GRAPHIFY_REF.is_dir() and str(_GRAPHIFY_REF) not in sys.path:
+        sys.path.insert(0, str(_GRAPHIFY_REF))
+
+    try:
+        mod = importlib.import_module("graphify.extract")
+        _dispatch_registry = getattr(mod, "_DISPATCH", {})
+        _shebang_registry = getattr(mod, "_SHEBANG_DISPATCH", {})
+        _safe_extract_fn = getattr(mod, "_safe_extract", None)
+    except (ImportError, ModuleNotFoundError):
+        _dispatch_registry = {}
+        _shebang_registry = {}
+        _safe_extract_fn = None
+
+    return _dispatch_registry, _shebang_registry, _safe_extract_fn
+
 
 from repopeek.detect import get_shebang_extension
 from repopeek.extractors.sql import extract_sql_glot
@@ -188,17 +205,18 @@ def extract_file(path: Path, root: Path | None = None) -> tuple[list[NodeRecord]
     if suffix == ".sql":
         raw = extract_sql_glot(path)
     else:
-        extractor = _DISPATCH.get(suffix)
+        dispatch_map, shebang_map, safe_extract_fn = _ensure_extractors_loaded()
+        extractor = dispatch_map.get(suffix)
         if not extractor and not suffix:
             shebang_ext = get_shebang_extension(path)
             if shebang_ext:
                 interpreter = shebang_ext.lstrip(".")
-                extractor = _SHEBANG_DISPATCH.get(interpreter) or _DISPATCH.get(shebang_ext)
+                extractor = shebang_map.get(interpreter) or dispatch_map.get(shebang_ext)
 
-        if not extractor:
+        if not extractor or not safe_extract_fn:
             return [], []
 
-        raw = _safe_extract(extractor, path, scan_root=root)
+        raw = safe_extract_fn(extractor, path, scan_root=root)
     prefix = get_namespace_prefix(path)
     nodes: list[NodeRecord] = []
     edges: list[EdgeRecord] = []
