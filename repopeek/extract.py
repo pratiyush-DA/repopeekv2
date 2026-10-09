@@ -1,10 +1,8 @@
 """Polyglot AST extraction engine and universal namespace adapter across all 40+ languages."""
 from __future__ import annotations
 
-import os
 import re
 import sys
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable
 
@@ -16,12 +14,16 @@ if _GRAPHIFY_REF.is_dir() and str(_GRAPHIFY_REF) not in sys.path:
 try:
     from graphify.extract import _DISPATCH, _SHEBANG_DISPATCH, _safe_extract
 except ImportError:
-    _DISPATCH = {}
-    _SHEBANG_DISPATCH = {}
-    def _safe_extract(extractor: Callable, path: Path, **kwargs: Any) -> dict:
+    _DISPATCH: dict[str, Any] = {}
+    _SHEBANG_DISPATCH: dict[str, Any] = {}
+
+    def _fallback_extract(extractor: Callable, path: Path, **kwargs: Any) -> dict[str, Any]:
         return {"nodes": [], "edges": []}
 
+    _safe_extract = _fallback_extract
+
 from repopeek.detect import get_shebang_extension
+from repopeek.extractors.sql import extract_sql_glot
 from repopeek.models import EdgeRecord, NodeRecord
 
 # Universal language namespace prefix map
@@ -177,9 +179,6 @@ def assign_edge_lenses(relation: str) -> set[str]:
     if not lenses:
         lenses.add("Symbol")
     return lenses
-
-
-from repopeek.extractors.sql import extract_sql_glot
 
 
 def extract_file(path: Path, root: Path | None = None) -> tuple[list[NodeRecord], list[EdgeRecord]]:
