@@ -69,6 +69,10 @@ def index_repository(
 
 
 def main(argv: list[str] | None = None) -> int:
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     parser = argparse.ArgumentParser(description="RepoPeek V2 - Semantic Code Property Graph Engine")
     parser.add_argument("--repo-path", default=".", help="Path to target repository root (default: current directory)")
     parser.add_argument("--output-dir", default=".repopeek", help="Directory for storage and graph cache")

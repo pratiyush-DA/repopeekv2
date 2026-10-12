@@ -37,6 +37,7 @@ graphify-out/
 graph.json
 graph.html
 GRAPH_TREE.html
+testing/
 
 # OS & IDE
 .DS_Store

@@ -40,23 +40,32 @@ def mine_git_co_changes(repo_path: Path | str) -> dict[str, dict[str, float]]:
     current_weight = 1.0
     current_files: list[str] = []
 
+    from repopeek.detect import DEFAULT_IGNORED_DIRS
+
+    MAX_COMMIT_PAIR_FILES = 150
+
+    def _process_commit_files(files: list[str], weight: float) -> None:
+        if not files or weight <= 0.0:
+            return
+        unique_files = sorted(set(files))
+        for f in unique_files:
+            file_weights[f] += weight
+        if len(unique_files) <= MAX_COMMIT_PAIR_FILES:
+            for i in range(len(unique_files)):
+                for j in range(i + 1, len(unique_files)):
+                    fa, fb = unique_files[i], unique_files[j]
+                    pair_weights[(fa, fb)] += weight
+                    pair_weights[(fb, fa)] += weight
+                    pair_counts[(fa, fb)] += 1
+                    pair_counts[(fb, fa)] += 1
+
     for line in proc.stdout.splitlines():
         line = line.strip()
         if not line:
             continue
         if line.startswith("COMMIT:"):
             # Process previous commit files
-            if current_files and current_weight > 0.0:
-                unique_files = sorted(set(current_files))
-                for f in unique_files:
-                    file_weights[f] += current_weight
-                for i in range(len(unique_files)):
-                    for j in range(i + 1, len(unique_files)):
-                        fa, fb = unique_files[i], unique_files[j]
-                        pair_weights[(fa, fb)] += current_weight
-                        pair_weights[(fb, fa)] += current_weight
-                        pair_counts[(fa, fb)] += 1
-                        pair_counts[(fb, fa)] += 1
+            _process_commit_files(current_files, current_weight)
 
             parts = line.split(":")
             if len(parts) >= 3:
@@ -70,21 +79,14 @@ def mine_git_co_changes(repo_path: Path | str) -> dict[str, dict[str, float]]:
                 current_weight = 1.0
             current_files = []
         else:
-            # File line
-            current_files.append(line.replace("\\", "/"))
+            # File line - filter out ignored directories
+            f_norm = line.replace("\\", "/")
+            parts = f_norm.split("/")
+            if not any(part in DEFAULT_IGNORED_DIRS for part in parts):
+                current_files.append(f_norm)
 
     # Process final commit
-    if current_files and current_weight > 0.0:
-        unique_files = sorted(set(current_files))
-        for f in unique_files:
-            file_weights[f] += current_weight
-        for i in range(len(unique_files)):
-            for j in range(i + 1, len(unique_files)):
-                fa, fb = unique_files[i], unique_files[j]
-                pair_weights[(fa, fb)] += current_weight
-                pair_weights[(fb, fa)] += current_weight
-                pair_counts[(fa, fb)] += 1
-                pair_counts[(fb, fa)] += 1
+    _process_commit_files(current_files, current_weight)
 
     # Calculate conditional probabilities P(B|A) = W(A & B) / W(A)
     co_changes: dict[str, dict[str, float]] = defaultdict(dict)
