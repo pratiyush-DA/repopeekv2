@@ -109,6 +109,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Exporters & Viewers
     parser.add_argument("--view", action="store_true", help="Generate standalone interactive D3 HTML graph viewer")
+    parser.add_argument("--serve", action="store_true", help="Start local HTTP server to preview interactive graph viewer")
     parser.add_argument("--port", type=int, default=8080, help="Port to serve interactive web viewer")
     parser.add_argument("--export-obsidian", help="Export graph into an Obsidian Markdown vault")
     parser.add_argument("--export-callflow", help="Export Mermaid callflow and architecture HTML report")
@@ -248,6 +249,32 @@ def main(argv: list[str] | None = None) -> int:
         summary = telemetry.get_summary(timeframe="all_time")
         export_interactive_html(graph, out_html, telemetry_summary=summary)
         print(f"Interactive graph viewer exported to {out_html}")
+        if args.serve:
+            import http.server
+            import socketserver
+
+            port = args.port
+            directory = str(out_html.parent.resolve())
+            filename = out_html.name
+
+            class Handler(http.server.SimpleHTTPRequestHandler):
+                def __init__(self, *a, **kw):
+                    super().__init__(*a, directory=directory, **kw)
+
+                def do_GET(self):
+                    if self.path in ("/", ""):
+                        self.path = f"/{filename}"
+                    return super().do_GET()
+
+                def log_message(self, format, *args):
+                    pass
+
+            print(f"Serving interactive graph at http://127.0.0.1:{port}/{filename}")
+            try:
+                with socketserver.TCPServer(("127.0.0.1", port), Handler) as httpd:
+                    httpd.serve_forever()
+            except KeyboardInterrupt:
+                pass
         return 0
 
     if args.export_obsidian:
