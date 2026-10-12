@@ -74,11 +74,14 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:
         pass
     parser = argparse.ArgumentParser(description="RepoPeek V2 - Semantic Code Property Graph Engine")
+    parser.add_argument("cmd", nargs="?", help="Optional subcommand (e.g. install)")
+    parser.add_argument("--platform", choices=["claude-code", "cursor", "antigravity", "copilot", "all"], help="Target AI assistant platform to configure")
     parser.add_argument("--repo-path", default=".", help="Path to target repository root (default: current directory)")
     parser.add_argument("--output-dir", default=".repopeek", help="Directory for storage and graph cache")
     parser.add_argument("--offline", action="store_true", help="Run deterministic offline indexing (zero LLM)")
     parser.add_argument("--watch", action="store_true", help="Start incremental watch daemon (<50ms sync on changes)")
     parser.add_argument("--serve-mcp", action="store_true", help="Start Model Context Protocol server")
+    parser.add_argument("--serve-http", action="store_true", help="Start streamable HTTP ASGI/MCP server")
     parser.add_argument("--transport", choices=["stdio", "http"], default="stdio", help="MCP transport (default: stdio)")
     parser.add_argument("--host", default="127.0.0.1", help="HTTP server bind host (default: 127.0.0.1)")
     parser.add_argument("--api-key", help="API key required for HTTP MCP access")
@@ -133,6 +136,15 @@ def main(argv: list[str] | None = None) -> int:
         print(telemetry.render_hud_markdown(summary))
         return 0
 
+    if args.cmd == "install" or args.platform:
+        from repopeek.installer import install_platform
+        target_plat = args.platform or "all"
+        res = install_platform(target_plat, repo_root)
+        print(f"RepoPeek assistant configuration for '{target_plat}' completed successfully:")
+        for cf in res["configured_files"]:
+            print(f"- {cf}")
+        return 0
+
     if args.hook:
         if args.hook == "install":
             res = install_hooks(repo_root)
@@ -169,11 +181,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     # Index repository
-    graph, storage, telemetry = index_repository(repo_root, repopeek_dir=repo_root / args.output_dir, force=args.force)
+    is_stdio_mcp = (args.serve_mcp and args.transport == "stdio") and not args.serve_http
+    if is_stdio_mcp:
+        orig_stdout = sys.stdout
+        sys.stdout = sys.stderr
+        try:
+            graph, storage, telemetry = index_repository(repo_root, repopeek_dir=repo_root / args.output_dir, force=args.force)
+        finally:
+            sys.stdout = orig_stdout
+    else:
+        graph, storage, telemetry = index_repository(repo_root, repopeek_dir=repo_root / args.output_dir, force=args.force)
     server = RepoPeekMCPServer(repo_root, graph, storage, telemetry)
 
-    if args.serve_mcp:
-        if args.transport == "http":
+    if args.serve_mcp or args.serve_http:
+        if args.serve_http or args.transport == "http":
             server.run_http_server(host=args.host, port=args.port, api_key=args.api_key)
         else:
             server.run_stdio_server()

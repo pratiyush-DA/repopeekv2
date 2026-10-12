@@ -710,8 +710,58 @@ class RepoPeekMCPServer:
             httpd.server_close()
 
 
-# Ponytail anti-hallucination verification self-test
+def main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint for repopeek-mcp command."""
+    import argparse
+    from repopeek.cli import index_repository
+
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+    parser = argparse.ArgumentParser(description="RepoPeek MCP Server - Stdio and HTTP Model Context Protocol Runner")
+    parser.add_argument("--repo-path", default=".", help="Target repository root (default: current directory)")
+    parser.add_argument("--output-dir", default=".repopeek", help="Directory for storage and graph cache")
+    parser.add_argument("--transport", choices=["stdio", "http"], default="stdio", help="MCP transport protocol (default: stdio)")
+    parser.add_argument("--http", action="store_true", help="Alias for --transport http")
+    parser.add_argument("--host", default="127.0.0.1", help="HTTP server bind host (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=8080, help="HTTP server port (default: 8080)")
+    parser.add_argument("--api-key", help="API key required for HTTP MCP access")
+    parser.add_argument("--force", action="store_true", help="Force index rebuild")
+
+    args = parser.parse_args(argv)
+    repo_root = Path(args.repo_path).resolve()
+    repopeek_dir = repo_root / args.output_dir
+
+    transport = "http" if args.http else args.transport
+
+    # In stdio mode, redirect any index logging to stderr to prevent corrupting stdout JSON-RPC stream
+    if transport == "stdio":
+        orig_stdout = sys.stdout
+        sys.stdout = sys.stderr
+        try:
+            graph, storage, telemetry = index_repository(repo_root, repopeek_dir=repopeek_dir, force=args.force)
+        finally:
+            sys.stdout = orig_stdout
+    else:
+        graph, storage, telemetry = index_repository(repo_root, repopeek_dir=repopeek_dir, force=args.force)
+
+    server = RepoPeekMCPServer(repo_root, graph, storage, telemetry)
+
+    if transport == "http":
+        server.run_http_server(host=args.host, port=args.port, api_key=args.api_key)
+    else:
+        server.run_stdio_server()
+
+    return 0
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] in ("--help", "-h", "--transport", "--http", "--repo-path"):
+        sys.exit(main())
+
+    # Self-test when run without arguments
     G = nx.DiGraph()
     G.add_node("py:app.py::main", label="main", kind="function", file_path="app.py", start_line=1, end_line=10)
     server = RepoPeekMCPServer(".", G)
@@ -723,3 +773,4 @@ if __name__ == "__main__":
     explain_res = server.dispatch_tool("repopeek_explain", {"query": "main"})
     assert "Node: main" in explain_res
     print("repopeek.serve 16-tool MCP server self-test passed!")
+
