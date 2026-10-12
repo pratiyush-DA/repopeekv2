@@ -248,11 +248,13 @@ def main(argv: list[str] | None = None) -> int:
         print(telemetry.render_hud_markdown(summary))
         return 0
 
-    if args.view:
-        out_html = Path(args.output_dir) / "repopeek_graph.html"
-        summary = telemetry.get_summary(timeframe="all_time")
-        export_interactive_html(graph, out_html, telemetry_summary=summary)
-        print(f"Interactive graph viewer exported to {out_html}")
+    if args.view or args.serve:
+        out_dir = repo_root / args.output_dir if not Path(args.output_dir).is_absolute() else Path(args.output_dir)
+        out_html = out_dir / "repopeek_graph.html"
+        if args.view or not out_html.exists():
+            summary = telemetry.get_summary(timeframe="all_time")
+            export_interactive_html(graph, out_html, telemetry_summary=summary)
+            print(f"Interactive graph viewer exported to {out_html}")
         if args.serve:
             import http.server
             import socketserver
