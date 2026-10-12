@@ -191,10 +191,39 @@ def export_interactive_html(
     margin-right: 4px;
     margin-bottom: 4px;
   }}
+  #scale-warning {{
+    display: none;
+    position: absolute;
+    top: 60px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(180, 40, 40, 0.92);
+    border: 1px solid #f85149;
+    color: #ffffff;
+    padding: 8px 18px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    z-index: 150;
+    backdrop-filter: blur(8px);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+  }}
+  .hull {{
+    fill-opacity: 0.08;
+    stroke-linejoin: round;
+    stroke-width: 34px;
+    stroke-opacity: 0.16;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+  }}
 </style>
 <script src="https://d3js.org/d3.v7.min.js"></script>
 </head>
 <body>
+
+<div id="scale-warning">
+  Scale Guard Alert: Large graph ({len(nodes_data)} nodes). Force layout throttled to maintain responsive UI.
+</div>
 
 <div id="navbar">
   <div class="nav-group">
@@ -256,11 +285,35 @@ svg.call(d3.zoom()
 
 let activeLens = "ALL";
 
+// Scale Guard: Throttle simulation for very large repositories
+const isLargeGraph = graphData.nodes.length > 5000;
+if (isLargeGraph) {{
+  const warn = document.getElementById("scale-warning");
+  if (warn) warn.style.display = "block";
+}}
+
 const simulation = d3.forceSimulation(graphData.nodes)
   .force("link", d3.forceLink(graphData.links).id(d => d.id).distance(60))
-  .force("charge", d3.forceManyBody().strength(-180))
+  .force("charge", d3.forceManyBody().strength(isLargeGraph ? -60 : -180))
   .force("center", d3.forceCenter(width / 2, height / 2))
-  .force("collision", d3.forceCollide().radius(25));
+  .force("collision", d3.forceCollide().radius(isLargeGraph ? 12 : 25));
+
+if (isLargeGraph) {{
+  simulation.alphaDecay(0.06); // Fast convergence
+}}
+
+const colorScale = d3.scaleOrdinal(d3.schemeCategory10);
+
+// Distinct communities for convex hulls
+const communities = Array.from(new Set(graphData.nodes.map(d => d.community))).filter(c => c !== undefined && c !== null);
+
+const hullGroup = g.append("g").attr("class", "hulls");
+const hullPaths = hullGroup.selectAll("path")
+  .data(communities)
+  .join("path")
+  .attr("class", "hull")
+  .attr("fill", d => colorScale(d))
+  .attr("stroke", d => colorScale(d));
 
 const link = g.append("g")
   .attr("stroke", "#30363d")
@@ -269,8 +322,6 @@ const link = g.append("g")
   .data(graphData.links)
   .join("line")
   .attr("stroke-width", d => Math.max(1, d.confidence * 2));
-
-const colorScale = d3.scaleOrdinal(d3.schemeCategory10);
 
 const node = g.append("g")
   .selectAll("circle")
@@ -295,6 +346,22 @@ const labels = g.append("g")
   .attr("dy", 3)
   .style("pointer-events", "none");
 
+function getCommunityHull(commId) {{
+  const pts = graphData.nodes
+    .filter(n => n.community === commId && !n.external)
+    .filter(n => activeLens === "ALL" || n.lenses.includes(activeLens))
+    .map(n => [n.x, n.y]);
+
+  if (pts.length < 2) return "";
+  if (pts.length === 2) {{
+    const [p1, p2] = pts;
+    const offset = 4;
+    return `M${{p1[0]}},${{p1[1]}}L${{p2[0]}},${{p2[1]}}L${{p2[0]+offset}},${{p2[1]+offset}}Z`;
+  }}
+  const hull = d3.polygonHull(pts);
+  return hull ? "M" + hull.join("L") + "Z" : "";
+}}
+
 simulation.on("tick", () => {{
   link
     .attr("x1", d => d.source.x)
@@ -309,6 +376,8 @@ simulation.on("tick", () => {{
   labels
     .attr("x", d => d.x)
     .attr("y", d => d.y);
+
+  hullPaths.attr("d", d => getCommunityHull(d));
 }});
 
 function drag(sim) {{
@@ -343,6 +412,8 @@ function setLens(lens) {{
 
   labels.transition().duration(300)
     .style("opacity", d => (lens === "ALL" || d.lenses.includes(lens)) ? 0.9 : 0.1);
+
+  hullPaths.attr("d", d => getCommunityHull(d));
 }}
 
 function showDetails(d) {{

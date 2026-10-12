@@ -66,8 +66,26 @@ class DualStorageEngine:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_file ON nodes (file_path);")
             conn.commit()
 
-    def sync_graph(self, graph: nx.DiGraph) -> None:
+    def get_node_count(self) -> int:
+        """Returns the number of nodes currently stored in SQLite cache."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.execute("SELECT COUNT(*) FROM nodes;")
+                row = cursor.fetchone()
+                return row[0] if row else 0
+        except Exception:
+            return 0
+
+    def sync_graph(self, graph: nx.DiGraph, force: bool = False) -> None:
         """Atomically populates SQLite tables and writes graph manifest."""
+        existing_count = self.get_node_count()
+        new_count = graph.number_of_nodes()
+        if existing_count > 0 and new_count < existing_count and not force:
+            raise ValueError(
+                f"Shrink guard rejected sync: existing graph has {existing_count} nodes, "
+                f"but new build has {new_count} nodes. Pass force=True to overwrite."
+            )
+
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("BEGIN TRANSACTION;")
             conn.execute("DELETE FROM nodes;")

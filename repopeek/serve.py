@@ -8,12 +8,15 @@ from typing import Any
 
 import networkx as nx
 
+from repopeek.analyze import find_import_cycles
 from repopeek.bridges.http import synthesize_http_bridges
 from repopeek.context.compiler import ContextCompiler
 from repopeek.context.planner import ChangePlanEngine
 from repopeek.context.verifier import build_ast_fact_card
+from repopeek.diagnostics import diagnose_graph, format_diagnostic_report
 from repopeek.storage import DualStorageEngine
 from repopeek.telemetry import TelemetryTracker
+from repopeek.traversal import explain_node, find_shortest_path, query_graph
 
 
 class RepoPeekMCPServer:
@@ -282,6 +285,42 @@ class RepoPeekMCPServer:
         summary = self.telemetry.get_summary(timeframe=timeframe)
         return self.telemetry.render_hud_markdown(summary)
 
+    # 12. repopeek_path
+    def tool_path(self, source: str, target: str, directed: bool = False) -> str:
+        """Finds the shortest path between source and target symbols with hop-by-hop relations."""
+        res = find_shortest_path(self.graph, source, target, directed=directed)
+        return res["formatted_text"] if res.get("found") else res.get("error", "No path found.")
+
+    # 13. repopeek_explain
+    def tool_explain(self, query: str) -> str:
+        """Generates an exhaustive technical breakdown of a symbol node."""
+        res = explain_node(self.graph, query)
+        return res["formatted_text"] if res.get("found") else res.get("error", "Symbol not found.")
+
+    # 14. repopeek_query
+    def tool_query(self, question: str, mode: str = "bfs", budget_tokens: int = 1500) -> str:
+        """Performs natural-language BFS or DFS graph traversal expanded across node vocabulary."""
+        res = query_graph(self.graph, question, mode=mode, budget_tokens=budget_tokens)
+        return res["formatted_text"]
+
+    # 15. repopeek_diagnose
+    def tool_diagnose(self) -> str:
+        """Audits graph integrity and returns a health diagnostic report."""
+        res = diagnose_graph(self.graph)
+        return format_diagnostic_report(res)
+
+    # 16. repopeek_cycles
+    def tool_cycles(self, max_cycles: int = 20) -> str:
+        """Detects circular import and dependency cycles across the graph."""
+        cycles = find_import_cycles(self.graph, max_cycles=max_cycles)
+        if not cycles:
+            return "No circular import or dependency cycles detected in graph."
+        lines = [f"## Detected Dependency Cycles ({len(cycles)}):", ""]
+        for i, c in enumerate(cycles, 1):
+            cycle_str = " -> ".join(f"`{node}`" for node in c) + f" -> `{c[0]}`"
+            lines.append(f"{i}. {cycle_str}")
+        return "\n".join(lines)
+
     def dispatch_tool(self, name: str, arguments: dict[str, Any]) -> str:
         """Dispatches an MCP tool call by name with argument unpacking."""
         if name == "repopeek_lookup":
@@ -317,6 +356,24 @@ class RepoPeekMCPServer:
             return self.tool_resolve(arguments.get("task", ""))
         elif name == "repopeek_savings":
             return self.tool_savings(arguments.get("timeframe", "current_session"))
+        elif name == "repopeek_path":
+            return self.tool_path(
+                arguments.get("source", ""),
+                arguments.get("target", ""),
+                directed=arguments.get("directed", False)
+            )
+        elif name == "repopeek_explain":
+            return self.tool_explain(arguments.get("query", ""))
+        elif name == "repopeek_query":
+            return self.tool_query(
+                arguments.get("question", ""),
+                mode=arguments.get("mode", "bfs"),
+                budget_tokens=arguments.get("budget_tokens", 1500)
+            )
+        elif name == "repopeek_diagnose":
+            return self.tool_diagnose()
+        elif name == "repopeek_cycles":
+            return self.tool_cycles(max_cycles=arguments.get("max_cycles", 20))
         else:
             return f"Error: Unknown tool '{name}'."
 
@@ -433,6 +490,56 @@ class RepoPeekMCPServer:
                     },
                 },
             },
+            {
+                "name": "repopeek_path",
+                "description": "Finds the shortest path between source and target symbols with hop-by-hop relations.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "source": {"type": "string", "description": "Source symbol name or ID"},
+                        "target": {"type": "string", "description": "Target symbol name or ID"},
+                        "directed": {"type": "boolean", "description": "Whether to enforce edge direction (default: false)"},
+                    },
+                    "required": ["source", "target"],
+                },
+            },
+            {
+                "name": "repopeek_explain",
+                "description": "Generates an exhaustive technical breakdown of a symbol node, including connectivity, degree, and lenses.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string", "description": "Symbol name or node ID to explain"}},
+                    "required": ["query"],
+                },
+            },
+            {
+                "name": "repopeek_query",
+                "description": "Performs natural-language BFS or DFS graph traversal expanded across node vocabulary.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string", "description": "Natural language query about graph concepts"},
+                        "mode": {"type": "string", "enum": ["bfs", "dfs"], "description": "Traversal mode (default: bfs)"},
+                        "budget_tokens": {"type": "integer", "description": "Maximum token budget (default: 1500)"},
+                    },
+                    "required": ["question"],
+                },
+            },
+            {
+                "name": "repopeek_diagnose",
+                "description": "Audits graph integrity and returns an anomaly and health diagnostic report.",
+                "inputSchema": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "repopeek_cycles",
+                "description": "Detects circular import and dependency cycles across the codebase.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "max_cycles": {"type": "integer", "description": "Maximum cycles to report (default: 20)"},
+                    },
+                },
+            },
         ]
 
     def run_stdio_server(self) -> None:
@@ -491,15 +598,128 @@ class RepoPeekMCPServer:
             sys.stdout.write(json.dumps(res) + "\n")
             sys.stdout.flush()
 
+    def run_http_server(self, host: str = "127.0.0.1", port: int = 8080, api_key: str | None = None) -> None:
+        """Executes Streamable HTTP JSON-RPC server for remote IDE and team access."""
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        server_instance = self
+
+        class MCPHTTPHandler(BaseHTTPRequestHandler):
+            def _check_auth(self) -> bool:
+                if not api_key:
+                    return True
+                auth = self.headers.get("Authorization", "")
+                x_key = self.headers.get("X-API-Key", "")
+                if auth.startswith("Bearer "):
+                    token = auth[7:].strip()
+                    if token == api_key:
+                        return True
+                if x_key == api_key:
+                    return True
+                return False
+
+            def do_GET(self) -> None:
+                if not self._check_auth():
+                    self.send_response(401)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(b'{"error": "Unauthorized"}')
+                    return
+
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                status_info = {
+                    "status": "ok",
+                    "server": "repopeek",
+                    "version": "2.0.0",
+                    "tools_count": len(server_instance.get_tool_definitions()),
+                }
+                self.wfile.write(json.dumps(status_info).encode("utf-8"))
+
+            def do_POST(self) -> None:
+                if not self._check_auth():
+                    self.send_response(401)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(b'{"error": "Unauthorized"}')
+                    return
+
+                content_len = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_len)
+
+                try:
+                    req = json.loads(body.decode("utf-8"))
+                except json.JSONDecodeError:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
+
+                req_id = req.get("id")
+                method = req.get("method")
+                params = req.get("params", {})
+
+                if method == "initialize":
+                    res = {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "result": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {"tools": {}},
+                            "serverInfo": {"name": "repopeek", "version": "2.0.0"},
+                        },
+                    }
+                elif method == "tools/list":
+                    res = {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "result": {"tools": server_instance.get_tool_definitions()},
+                    }
+                elif method == "tools/call":
+                    tname = params.get("name", "")
+                    targs = params.get("arguments", {})
+                    content_text = server_instance.dispatch_tool(tname, targs)
+                    res = {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "result": {
+                            "content": [{"type": "text", "text": content_text}],
+                            "isError": False,
+                        },
+                    }
+                else:
+                    res = {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "error": {"code": -32601, "message": f"Method '{method}' not found"},
+                    }
+
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps(res).encode("utf-8"))
+
+            def log_message(self, format: str, *args: Any) -> None:
+                pass  # Suppress default noise
+
+        httpd = ThreadingHTTPServer((host, port), MCPHTTPHandler)
+        print(f"RepoPeek MCP HTTP Server listening at http://{host}:{port}/mcp")
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            httpd.server_close()
+
 
 # Ponytail anti-hallucination verification self-test
 if __name__ == "__main__":
     G = nx.DiGraph()
     G.add_node("py:app.py::main", label="main", kind="function", file_path="app.py", start_line=1, end_line=10)
     server = RepoPeekMCPServer(".", G)
-    assert len(server.get_tool_definitions()) == 11
+    assert len(server.get_tool_definitions()) == 16
     resp = server.dispatch_tool("repopeek_lookup", {"query": "main"})
     assert "main" in resp
     savings_hud = server.dispatch_tool("repopeek_savings", {})
     assert "RepoPeek Context Efficiency" in savings_hud
-    print("repopeek.serve 11-tool MCP server self-test passed!")
+    explain_res = server.dispatch_tool("repopeek_explain", {"query": "main"})
+    assert "Node: main" in explain_res
+    print("repopeek.serve 16-tool MCP server self-test passed!")

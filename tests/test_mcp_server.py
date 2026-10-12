@@ -34,7 +34,7 @@ def test_server():
 
 def test_mcp_tool_definitions_count(test_server):
     defs = test_server.get_tool_definitions()
-    assert len(defs) == 11
+    assert len(defs) == 16
     names = {d["name"] for d in defs}
     expected = {
         "repopeek_lookup",
@@ -48,6 +48,11 @@ def test_mcp_tool_definitions_count(test_server):
         "repopeek_co_changes",
         "repopeek_resolve",
         "repopeek_savings",
+        "repopeek_path",
+        "repopeek_explain",
+        "repopeek_query",
+        "repopeek_diagnose",
+        "repopeek_cycles",
     }
     assert names == expected
 
@@ -99,3 +104,24 @@ def test_mcp_tools_execution(test_server):
     # 11. savings
     res_savings = test_server.dispatch_tool("repopeek_savings", {})
     assert "RepoPeek Context Efficiency & ROI Scoreboard" in res_savings
+
+    # 12. path
+    res_path = test_server.dispatch_tool("repopeek_path", {"source": "checkout", "target": "invoices"})
+    assert "Shortest path (2 hops)" in res_path
+
+    # 13. explain
+    res_explain = test_server.dispatch_tool("repopeek_explain", {"query": "parse_invoice"})
+    assert "Node: parse_invoice" in res_explain
+    assert "Connections" in res_explain
+
+    # 14. query
+    res_query = test_server.dispatch_tool("repopeek_query", {"question": "invoice parsing checkout"})
+    assert "Query Result:" in res_query
+
+    # 15. diagnose
+    res_diag = test_server.dispatch_tool("repopeek_diagnose", {})
+    assert "RepoPeek Graph Diagnostics Report" in res_diag
+
+    # 16. cycles
+    res_cycles = test_server.dispatch_tool("repopeek_cycles", {})
+    assert "No circular import or dependency cycles detected" in res_cycles
